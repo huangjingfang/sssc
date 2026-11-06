@@ -1,0 +1,51 @@
+[package]
+name = "sssc"
+version = "0.1.0"
+description = "SSSC — 跨平台 S3 多集群桌面客户端"
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "sssc_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hmac = "0.12"
+sha1 = "0.10"
+base64 = "0.22"
+percent-encoding = "2"
+bytes = "1"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+http-body = "1"
+http-body-util = "0.1"
+httpdate = "1"
+tokio = { version = "1", features = ["full"] }
+aws-config = { version = "1", features = ["behavior-version-latest"] }
+aws-sdk-s3 = { version = "1", features = ["behavior-version-latest"] }
+aws-smithy-types = "1"
+aws-smithy-runtime-api = "1"
+aws-smithy-http-client = "1"
+hyper = "1"
+hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "native-tokio", "ring", "tls12"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+strip = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSImage", "NSResponder"] }
+objc2-foundation = { version = "0.3", features = ["NSData"] }

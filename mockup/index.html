@@ -1,0 +1,677 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SSSC · S3 多集群客户端 — 高保真原型</title>
+<style>
+/* ============ Design Tokens（DeepSeek 实测 token 落地，见 docs/03） ============ */
+:root {
+  --ds-color-brand: #4D6BFE;
+  --ds-color-brand-medium: #4176E6;
+  --ds-brand-wash: rgba(65,118,230,.12);
+  --ds-btn-primary-bg: #1A1615;
+  --ds-btn-primary-fg: #FFFFFF;
+  --ds-fg: #1E232C;
+  --ds-fg-2: rgba(30,35,44,.70);
+  --ds-fg-3: rgba(30,35,44,.55);
+  --ds-placeholder: #8691A1;
+  --ds-link: #234792;
+  --ds-bg-page: #F9F8F8;
+  --ds-bg-surface: #FFFFFF;
+  --ds-bg-hover: rgba(0,0,0,.04);
+  --ds-border-subtle: rgba(0,0,0,.06);
+  --ds-border-divider: rgba(0,0,0,.08);
+  --ds-border: rgba(0,0,0,.10);
+  --ds-border-strong: rgba(0,0,0,.20);
+  --ds-shadow-card: 0 0 1px #F1F5F9, 0 2px 4px rgba(0,0,0,.05), 0 12px 24px rgba(0,0,0,.06);
+  --ds-success: #2E7D5B; --ds-success-wash: rgba(46,125,91,.10);
+  --ds-warning: #B4762A; --ds-warning-wash: rgba(180,118,42,.10);
+  --ds-danger: #C2453D;  --ds-danger-wash: rgba(194,69,61,.10);
+  --cluster-red: #C2453D; --cluster-green: #2E7D5B;
+  --cluster-blue: #4176E6; --cluster-purple: #7A5AF8; --cluster-amber: #B4762A;
+  --ds-font-sans: "DM Sans", system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --ds-font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Consolas, monospace;
+  --r-sm: 8px; --r-input: 10px; --r-panel: 16px; --r-card: 24px;
+}
+html.dark {
+  --ds-fg: #ECEDEE;
+  --ds-fg-2: rgba(236,237,238,.70);
+  --ds-fg-3: rgba(236,237,238,.55);
+  --ds-placeholder: #6B7280;
+  --ds-link: #8FA6FF;
+  --ds-bg-page: #1F1F1F;
+  --ds-bg-surface: #292A2A;
+  --ds-bg-hover: rgba(255,255,255,.06);
+  --ds-border-subtle: rgba(255,255,255,.08);
+  --ds-border-divider: rgba(255,255,255,.12);
+  --ds-border: rgba(255,255,255,.16);
+  --ds-border-strong: rgba(255,255,255,.25);
+  --ds-color-brand: #6C86FF;
+  --ds-color-brand-medium: #8FA6FF;
+  --ds-brand-wash: rgba(108,134,255,.16);
+  --ds-btn-primary-bg: #ECEDEE;
+  --ds-btn-primary-fg: #1A1615;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  font-family: var(--ds-font-sans); font-size: 15px; font-weight: 400;
+  color: var(--ds-fg); background: var(--ds-bg-page);
+  height: 100vh; overflow: hidden; line-height: 1.6;
+  transition: background .2s ease-out, color .2s ease-out;
+}
+button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+.mono { font-family: var(--ds-font-mono); font-size: 13px; }
+svg { flex-shrink: 0; }
+
+/* ============ 布局 ============ */
+.app { display: flex; height: 100vh; }
+.sidebar {
+  width: 264px; flex-shrink: 0; display: flex; flex-direction: column;
+  border-right: 1px solid var(--ds-border-divider); background: var(--ds-bg-page);
+  transition: width .2s ease-out;
+}
+.sidebar.collapsed { width: 56px; }
+.sidebar.collapsed .side-label, .sidebar.collapsed .cluster-body,
+.sidebar.collapsed .side-foot-text { display: none; }
+.main { flex: 1; display: flex; flex-direction: column; min-width: 0; position: relative; }
+.cluster-accent { height: 4px; flex-shrink: 0; background: var(--cluster-red); transition: background .2s; }
+
+/* 侧栏头部 */
+.side-head { display: flex; align-items: center; gap: 10px; padding: 16px 16px 12px; }
+.logo { width: 28px; height: 28px; border-radius: var(--r-sm); background: var(--ds-btn-primary-bg);
+  color: var(--ds-btn-primary-fg); display: flex; align-items: center; justify-content: center;
+  font-weight: 500; font-size: 13px; }
+.side-head .title { font-weight: 500; flex: 1; }
+.icon-btn {
+  width: 32px; height: 32px; border-radius: var(--r-sm); display: flex;
+  align-items: center; justify-content: center; color: var(--ds-fg-2);
+  transition: background .15s ease-out;
+}
+.icon-btn:hover { background: var(--ds-bg-hover); color: var(--ds-fg); }
+
+/* 搜索/命令面板 */
+.cmdk-trigger {
+  margin: 4px 16px 12px; display: flex; align-items: center; gap: 8px;
+  height: 36px; padding: 0 10px; border-radius: var(--r-input);
+  border: 1px solid var(--ds-border); color: var(--ds-placeholder); font-size: 13px;
+  transition: border-color .15s;
+}
+.cmdk-trigger:hover { border-color: var(--ds-border-strong); }
+.cmdk-trigger .kbd { margin-left: auto; font-family: var(--ds-font-mono); font-size: 11px;
+  border: 1px solid var(--ds-border-divider); border-radius: 4px; padding: 0 5px; color: var(--ds-fg-3); }
+
+/* 集群列表 */
+.cluster-group { padding: 0 8px; overflow-y: auto; flex: 1; }
+.side-label { font-size: 12px; color: var(--ds-fg-3); padding: 8px 10px 4px; }
+.cluster-item {
+  display: flex; align-items: stretch; border-radius: var(--r-sm); margin: 2px 0;
+  cursor: pointer; transition: background .15s ease-out; position: relative;
+}
+.cluster-item:hover { background: var(--ds-bg-hover); }
+.cluster-item.active { background: var(--ds-brand-wash); }
+.cluster-color { width: 4px; border-radius: 2px; margin: 8px 8px 8px 6px; flex-shrink: 0; }
+.cluster-item.active .cluster-color { outline: 1px solid rgba(65,118,230,.3); }
+.cluster-body { flex: 1; padding: 7px 10px 7px 2px; min-width: 0; }
+.cluster-name { font-size: 13px; font-weight: 500; display: flex; align-items: center; gap: 6px; }
+.cluster-item.active .cluster-name { color: var(--ds-color-brand-medium); }
+.cluster-meta { font-size: 12px; color: var(--ds-fg-3); display: flex; gap: 6px; align-items: center; }
+.dot { width: 6px; height: 6px; border-radius: 100px; display: inline-block; }
+.dot.on { background: var(--ds-success); }
+.dot.off { background: var(--ds-placeholder); }
+.cluster-tag { font-size: 10px; padding: 0 6px; border-radius: 100px; line-height: 16px;
+  border: 1px solid var(--ds-border); color: var(--ds-fg-3); }
+
+/* 侧栏底部 */
+.side-foot { border-top: 1px solid var(--ds-border-divider); padding: 8px; }
+.foot-item {
+  display: flex; align-items: center; gap: 10px; height: 34px; padding: 0 10px;
+  border-radius: var(--r-sm); font-size: 13px; color: var(--ds-fg-2);
+  cursor: pointer; width: 100%; transition: background .15s;
+}
+.foot-item:hover { background: var(--ds-bg-hover); color: var(--ds-fg); }
+.sidebar.collapsed .foot-item { justify-content: center; padding: 0; }
+
+/* ============ 工具栏 ============ */
+.toolbar {
+  display: flex; align-items: center; gap: 8px; padding: 10px 20px;
+  border-bottom: 1px solid var(--ds-border-divider); background: var(--ds-bg-page);
+  min-height: 56px; flex-shrink: 0;
+}
+.breadcrumb { display: flex; align-items: center; gap: 2px; font-size: 14px; min-width: 0; overflow: hidden; }
+.breadcrumb button { padding: 2px 6px; border-radius: 6px; color: var(--ds-fg-2); transition: background .15s; white-space: nowrap; }
+.breadcrumb button:hover { background: var(--ds-bg-hover); color: var(--ds-fg); }
+.breadcrumb .cur { color: var(--ds-fg); font-weight: 500; padding: 2px 6px; white-space: nowrap; }
+.breadcrumb .sep { color: var(--ds-fg-3); font-size: 12px; }
+.toolbar .spacer { flex: 1; }
+.search-box {
+  display: flex; align-items: center; gap: 6px; height: 34px; width: 220px;
+  border: 1px solid var(--ds-border); border-radius: var(--r-input); padding: 0 10px;
+  color: var(--ds-placeholder); font-size: 13px; transition: border-color .15s;
+}
+.search-box:focus-within { border-color: var(--ds-color-brand); outline: 2px solid var(--ds-brand-wash); }
+.search-box input { border: none; outline: none; background: none; color: var(--ds-fg); font: inherit; width: 100%; }
+
+/* 按钮 */
+.btn {
+  height: 34px; padding: 0 14px; border-radius: var(--r-sm); font-size: 13px; font-weight: 500;
+  display: inline-flex; align-items: center; gap: 6px; transition: all .15s ease-out; white-space: nowrap;
+}
+.btn-primary { background: var(--ds-btn-primary-bg); color: var(--ds-btn-primary-fg); }
+.btn-primary:hover { opacity: .85; }
+.btn-secondary {
+  background: var(--ds-bg-surface); border: 1px solid var(--ds-border); color: var(--ds-fg);
+}
+.btn-secondary:hover { border-color: var(--ds-border-strong); }
+.btn-ghost { color: var(--ds-fg-2); }
+.btn-ghost:hover { background: var(--ds-bg-hover); color: var(--ds-fg); }
+.btn-danger { background: var(--ds-danger); color: #fff; }
+
+/* ============ 表格 ============ */
+.table-wrap { flex: 1; overflow: auto; padding: 8px 20px 12px; }
+table { width: 100%; border-collapse: collapse; }
+thead th {
+  text-align: left; font-size: 12px; font-weight: 500; color: var(--ds-fg-3);
+  padding: 8px 12px; border-bottom: 1px solid var(--ds-border-divider); position: sticky; top: 0;
+  background: var(--ds-bg-page); z-index: 1; white-space: nowrap;
+}
+tbody td { padding: 0 12px; height: 36px; border-bottom: 1px solid var(--ds-border-subtle); font-size: 13px; white-space: nowrap; }
+tbody tr { transition: background .12s; cursor: default; }
+tbody tr:hover { background: var(--ds-bg-hover); }
+tbody tr:hover .row-actions { opacity: 1; }
+td.num, th.num { text-align: right; }
+td .name { display: flex; align-items: center; gap: 10px; max-width: 460px; overflow: hidden; }
+td .name .mono { overflow: hidden; text-overflow: ellipsis; }
+td .name svg { color: var(--ds-fg-3); }
+.name.link { cursor: pointer; }
+td.time { color: var(--ds-fg-2); font-family: var(--ds-font-mono); font-size: 12px; }
+.row-actions { opacity: 0; display: flex; gap: 2px; transition: opacity .12s; }
+.icon-btn.sm { width: 28px; height: 28px; }
+
+/* chip */
+.chip {
+  display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 9px;
+  border-radius: 100px; font-size: 11px; font-weight: 500; line-height: 1;
+}
+.chip.brand { background: var(--ds-brand-wash); color: var(--ds-color-brand-medium); border: 1px solid rgba(65,118,230,.25); }
+.chip.neutral { background: var(--ds-bg-hover); color: var(--ds-fg-2); border: 1px solid var(--ds-border-divider); }
+.chip.success { background: var(--ds-success-wash); color: var(--ds-success); }
+.chip.warning { background: var(--ds-warning-wash); color: var(--ds-warning); }
+.chip.danger { background: var(--ds-danger-wash); color: var(--ds-danger); }
+
+/* 上传进度行内 chip */
+.chip.progress { background: var(--ds-brand-wash); color: var(--ds-color-brand-medium);
+  font-family: var(--ds-font-mono); border: 1px solid rgba(65,118,230,.25); min-width: 90px; }
+
+/* ============ 传输条 ============ */
+.transfer-bar {
+  flex-shrink: 0; border-top: 1px solid var(--ds-border-divider); background: var(--ds-bg-surface);
+  transition: height .2s ease-out; height: 44px; overflow: hidden;
+}
+.transfer-bar.open { height: 300px; }
+.tb-head { display: flex; align-items: center; gap: 12px; height: 44px; padding: 0 20px; cursor: pointer; }
+.tb-title { font-size: 13px; font-weight: 500; }
+.tb-sub { font-size: 12px; color: var(--ds-fg-3); font-family: var(--ds-font-mono); }
+.tb-progress { flex: 1; height: 4px; border-radius: 100px; background: var(--ds-border-subtle); max-width: 320px; overflow: hidden; }
+.tb-progress > div { height: 100%; border-radius: 100px; background: var(--ds-color-brand); transition: width .4s ease-out; }
+.tb-body { height: 256px; overflow-y: auto; padding: 4px 20px 16px; border-top: 1px solid var(--ds-border-subtle); }
+.task {
+  border: 1px solid var(--ds-border-subtle); border-radius: var(--r-sm); padding: 10px 12px;
+  margin-top: 8px; background: var(--ds-bg-page);
+}
+.task-head { display: flex; align-items: center; gap: 10px; }
+.task-name { font-family: var(--ds-font-mono); font-size: 12px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-log {
+  font-family: var(--ds-font-mono); font-size: 12px; color: var(--ds-fg-3); margin-top: 8px;
+  background: var(--ds-bg-surface); border: 1px solid var(--ds-border-subtle); border-radius: 6px;
+  padding: 8px 10px; line-height: 1.7;
+}
+.task-log .ok { color: var(--ds-success); }
+
+/* ============ 命令面板 ⌘K ============ */
+.overlay {
+  position: absolute; inset: 0; background: rgba(0,0,0,.25); z-index: 50;
+  display: none; align-items: flex-start; justify-content: center; padding-top: 12vh;
+}
+.overlay.show { display: flex; }
+.cmdk {
+  width: 560px; max-width: 90%; background: var(--ds-bg-surface); border-radius: var(--r-panel);
+  box-shadow: var(--ds-shadow-card); border: 1px solid var(--ds-border-divider); overflow: hidden;
+}
+.cmdk input {
+  width: 100%; border: none; outline: none; background: none; padding: 16px 18px;
+  font: inherit; font-size: 15px; color: var(--ds-fg); border-bottom: 1px solid var(--ds-border-subtle);
+}
+.cmdk input::placeholder { color: var(--ds-placeholder); }
+.cmdk-list { max-height: 320px; overflow-y: auto; padding: 6px; }
+.cmdk-item {
+  display: flex; align-items: center; gap: 12px; padding: 9px 12px; border-radius: var(--r-sm);
+  cursor: pointer; font-size: 14px;
+}
+.cmdk-item:hover, .cmdk-item.sel { background: var(--ds-bg-hover); }
+.cmdk-item .hint { margin-left: auto; font-size: 12px; color: var(--ds-fg-3); font-family: var(--ds-font-mono); }
+.cmdk-item .cat { font-size: 11px; color: var(--ds-fg-3); border: 1px solid var(--ds-border-divider); border-radius: 100px; padding: 0 7px; line-height: 17px; }
+
+/* ============ 详情面板 ============ */
+.detail {
+  position: absolute; top: 4px; right: 0; bottom: 0; width: 400px; background: var(--ds-bg-surface);
+  border-left: 1px solid var(--ds-border-divider); box-shadow: var(--ds-shadow-card);
+  transform: translateX(100%); transition: transform .2s ease-out; z-index: 40;
+  display: flex; flex-direction: column;
+}
+.detail.open { transform: translateX(0); }
+.detail-head { display: flex; align-items: center; gap: 8px; padding: 14px 16px; border-bottom: 1px solid var(--ds-border-subtle); }
+.detail-head .t { font-weight: 500; flex: 1; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.detail-body { flex: 1; overflow-y: auto; padding: 16px; }
+.kv { display: grid; grid-template-columns: 120px 1fr; gap: 8px 12px; font-size: 13px; margin-bottom: 20px; }
+.kv .k { color: var(--ds-fg-3); }
+.kv .v { font-family: var(--ds-font-mono); font-size: 12px; word-break: break-all; }
+.section-t { font-size: 12px; font-weight: 500; color: var(--ds-fg-3); margin: 4px 0 10px; }
+.presign-card {
+  border: 1px solid var(--ds-border-subtle); border-radius: var(--r-panel); padding: 14px; margin-bottom: 16px;
+}
+.presign-card .row { display: flex; gap: 8px; margin-bottom: 10px; }
+select.select, input.input {
+  height: 34px; border: 1px solid var(--ds-border); border-radius: var(--r-input); background: var(--ds-bg-surface);
+  color: var(--ds-fg); font: inherit; font-size: 13px; padding: 0 10px; outline: none;
+}
+select.select:focus, input.input:focus { border-color: var(--ds-color-brand); outline: 2px solid var(--ds-brand-wash); }
+.url-box {
+  font-family: var(--ds-font-mono); font-size: 11px; background: var(--ds-bg-page); border: 1px solid var(--ds-border-subtle);
+  border-radius: var(--r-sm); padding: 8px 10px; color: var(--ds-fg-2); word-break: break-all; line-height: 1.6;
+}
+
+/* ============ 对话框 ============ */
+.dialog-wrap { position: absolute; inset: 0; z-index: 60; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,.25); }
+.dialog-wrap.show { display: flex; }
+.dialog {
+  width: 440px; background: var(--ds-bg-surface); border-radius: var(--r-panel);
+  box-shadow: var(--ds-shadow-card); padding: 24px;
+}
+.dialog h3 { font-size: 16px; font-weight: 500; margin-bottom: 8px; }
+.dialog h3.danger { color: var(--ds-danger); }
+.dialog p { font-size: 13px; color: var(--ds-fg-2); margin-bottom: 16px; }
+.dialog p strong { color: var(--ds-fg); font-family: var(--ds-font-mono); font-weight: 500; }
+.dialog .foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+.input.confirm { width: 100%; margin-bottom: 4px; font-family: var(--ds-font-mono); }
+
+/* toast */
+.toast {
+  position: absolute; right: 20px; bottom: 64px; z-index: 70; background: var(--ds-bg-surface);
+  border: 1px solid var(--ds-border); border-radius: var(--r-panel); box-shadow: var(--ds-shadow-card);
+  padding: 12px 16px; width: 360px; display: none;
+}
+.toast.show { display: block; }
+.toast .t { font-size: 13px; font-weight: 500; display: flex; align-items: center; gap: 8px; }
+.toast .m { font-size: 12px; color: var(--ds-fg-2); margin-top: 4px; }
+.toast .rid {
+  font-family: var(--ds-font-mono); font-size: 11px; color: var(--ds-fg-3); margin-top: 8px;
+  display: flex; align-items: center; gap: 8px; background: var(--ds-bg-page);
+  border: 1px solid var(--ds-border-subtle); border-radius: 6px; padding: 5px 8px;
+}
+
+/* blink cursor（DeepSeek 标志性动效） */
+@keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0; } }
+.cursor { display: inline-block; width: 7px; height: 14px; background: var(--ds-color-brand);
+  border-radius: 1px; vertical-align: -2px; animation: blink 1s step-end infinite; }
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: var(--ds-border); border-radius: 100px; }
+::-webkit-scrollbar-track { background: transparent; }
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- ================= 侧栏 ================= -->
+  <aside class="sidebar" id="sidebar">
+    <div class="side-head">
+      <div class="logo">S3</div>
+      <span class="title side-label" style="font-size:15px">SSSC</span>
+      <button class="icon-btn" title="折叠侧栏" onclick="toggleSidebar()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+      </button>
+    </div>
+    <button class="cmdk-trigger" onclick="openCmdk()">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="11" cy="11" r="7"/><path d="m21 21-4-4"/></svg>
+      搜索对象、切换集群…
+      <span class="kbd">⌘K</span>
+    </button>
+    <div class="cluster-group">
+      <div class="side-label">集群 · 3</div>
+      <!-- prod -->
+      <div class="cluster-item active" data-cluster="prod" onclick="switchCluster(this,'prod')">
+        <div class="cluster-color" style="background:var(--cluster-red)"></div>
+        <div class="cluster-body">
+          <div class="cluster-name">prod-minio <span class="cluster-tag">prod</span></div>
+          <div class="cluster-meta"><span class="dot on"></span>已连接 · 12ms · 27 桶</div>
+        </div>
+      </div>
+      <!-- dev -->
+      <div class="cluster-item" data-cluster="dev" onclick="switchCluster(this,'dev')">
+        <div class="cluster-color" style="background:var(--cluster-green)"></div>
+        <div class="cluster-body">
+          <div class="cluster-name">dev-ceph <span class="cluster-tag">dev</span></div>
+          <div class="cluster-meta"><span class="dot on"></span>已连接 · 38ms · 9 桶</div>
+        </div>
+      </div>
+      <!-- aws -->
+      <div class="cluster-item" data-cluster="aws" onclick="switchCluster(this,'aws')">
+        <div class="cluster-color" style="background:var(--cluster-blue)"></div>
+        <div class="cluster-body">
+          <div class="cluster-name">aws-cn-beijing</div>
+          <div class="cluster-meta"><span class="dot off"></span>未连接 · STS 过期</div>
+        </div>
+      </div>
+      <button class="foot-item" style="margin-top:6px;color:var(--ds-color-brand-medium)" onclick="showToast()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 5v14M5 12h14"/></svg>
+        <span class="side-foot-text">添加集群</span>
+      </button>
+    </div>
+    <div class="side-foot">
+      <button class="foot-item" onclick="toggleTransfer()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+        <span class="side-foot-text">传输队列</span>
+      </button>
+      <button class="foot-item" onclick="showToast()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 8v4m0 4h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
+        <span class="side-foot-text">事件日志</span>
+      </button>
+      <button class="foot-item" onclick="toggleTheme()">
+        <svg id="theme-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        <span class="side-foot-text" id="theme-label">深色模式</span>
+      </button>
+    </div>
+  </aside>
+
+  <!-- ================= 主区 ================= -->
+  <div class="main">
+    <div class="cluster-accent" id="accent"></div>
+    <div class="toolbar">
+      <div class="breadcrumb">
+        <button>prod-minio</button><span class="sep">/</span>
+        <button>artifacts</button><span class="sep">/</span>
+        <span class="cur mono">releases/v2.4.1/</span>
+      </div>
+      <div class="spacer"></div>
+      <div class="search-box">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="11" cy="11" r="7"/><path d="m21 21-4-4"/></svg>
+        <input placeholder="前缀过滤 (start-after)">
+      </div>
+      <button class="btn btn-primary">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 15V3m0 0L8 7m4-4 4 4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+        上传
+      </button>
+      <button class="btn btn-secondary" onclick="showToast()">新建文件夹</button>
+      <button class="icon-btn" title="刷新" onclick="showToast()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 12a9 9 0 1 1-2.6-6.3L21 8"/><path d="M21 3v5h-5"/></svg>
+      </button>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:46%">名称</th>
+            <th class="num">大小</th>
+            <th>存储类</th>
+            <th>最后修改</th>
+            <th style="width:110px"></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><div class="name link" onclick="showToast()">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 20h16a1 1 0 0 0 1-1V8a1 1 0 0 0-1-1h-8l-2-3H4a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1Z"/></svg>
+              <span class="mono">../</span></div></td>
+            <td class="num"></td><td></td><td></td><td></td>
+          </tr>
+          <tr>
+            <td><div class="name link" onclick="showToast()">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 20h16a1 1 0 0 0 1-1V8a1 1 0 0 0-1-1h-8l-2-3H4a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1Z"/></svg>
+              <span class="mono">bin/</span></div></td>
+            <td class="num">—</td><td></td><td class="time">2026-10-30 14:22</td><td></td>
+          </tr>
+          <tr>
+            <td><div class="name link" onclick="showToast()">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 20h16a1 1 0 0 0 1-1V8a1 1 0 0 0-1-1h-8l-2-3H4a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1Z"/></svg>
+              <span class="mono">assets/</span></div></td>
+            <td class="num">—</td><td></td><td class="time">2026-11-02 09:41</td><td></td>
+          </tr>
+          <tr onclick="openDetail(event)">
+            <td><div class="name">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/></svg>
+              <span class="mono">sssc-server-v2.4.1-darwin-arm64.tar.gz</span>
+              <span class="chip progress">上传中 63% ▸</span></div></td>
+            <td class="num mono">128.4 MB</td>
+            <td><span class="chip neutral">STANDARD</span></td>
+            <td class="time">刚刚</td>
+            <td><div class="row-actions">
+              <button class="icon-btn sm" title="暂停"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 4H6v16h4zM18 4h-4v16h4z"/></svg></button>
+              <button class="icon-btn sm" title="取消"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+            </div></td>
+          </tr>
+          <tr onclick="openDetail(event)">
+            <td><div class="name">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/></svg>
+              <span class="mono">sssc-server-v2.4.1-linux-amd64.tar.gz</span></div></td>
+            <td class="num mono">131.2 MB</td>
+            <td><span class="chip neutral">STANDARD</span></td>
+            <td class="time">2026-11-04 18:03</td>
+            <td><div class="row-actions">
+              <button class="icon-btn sm" title="生成预签名链接" onclick="openDetail(event);event.stopPropagation()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg></button>
+              <button class="icon-btn sm" title="下载"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg></button>
+              <button class="icon-btn sm" title="删除" onclick="openDeleteDialog();event.stopPropagation()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m3 0-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg></button>
+            </div></td>
+          </tr>
+          <tr onclick="openDetail(event)">
+            <td><div class="name">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/></svg>
+              <span class="mono">build-20261104.log</span></div></td>
+            <td class="num mono">2.1 MB</td>
+            <td><span class="chip neutral">STANDARD_IA</span></td>
+            <td class="time">2026-11-04 03:00</td>
+            <td><div class="row-actions">
+              <button class="icon-btn sm" title="下载"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg></button>
+              <button class="icon-btn sm" title="删除" onclick="openDeleteDialog();event.stopPropagation()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m3 0-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg></button>
+            </div></td>
+          </tr>
+          <tr onclick="openDetail(event)">
+            <td><div class="name">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/></svg>
+              <span class="mono">audit-2026-10.tar.zst</span>
+              <span class="chip warning">GLACIER · 归档</span></div></td>
+            <td class="num mono">48.7 GB</td>
+            <td><span class="chip warning">GLACIER</span></td>
+            <td class="time">2026-10-28 22:10</td>
+            <td><div class="row-actions">
+              <button class="icon-btn sm" title="恢复 (RestoreObject)" onclick="showToast();event.stopPropagation()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 12a9 9 0 1 1-2.6-6.3L21 8"/><path d="M21 3v5h-5"/></svg></button>
+            </div></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- 传输条 -->
+    <div class="transfer-bar open" id="transfer">
+      <div class="tb-head" onclick="toggleTransfer()">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 15V3m0 0L8 7m4-4 4 4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+        <span class="tb-title">传输 · 2 个任务进行中</span>
+        <div class="tb-progress"><div style="width:63%"></div></div>
+        <span class="tb-sub">12.4 MB/s · 剩余约 6s</span>
+        <span class="chip success">全部暂停</span>
+      </div>
+      <div class="tb-body" onclick="event.stopPropagation()">
+        <div class="task">
+          <div class="task-head">
+            <span class="chip brand">MPU 上传</span>
+            <span class="task-name">artifacts/releases/v2.4.1/sssc-server-v2.4.1-darwin-arm64.tar.gz → prod-minio</span>
+            <span class="chip progress">63% · 24/38 parts</span>
+            <button class="icon-btn sm"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 4H6v16h4zM18 4h-4v16h4z"/></svg></button>
+          </div>
+          <div class="task-log">
+<span class="ok">✓</span> CreateMultipartUpload · uploadId=8fXk…q2A<br>
+<span class="ok">✓</span> part 17/38 · etag "9c1b3e…" · 210ms<br>
+<span class="ok">✓</span> part 18/38 · etag "77a02f…" · 198ms<br>
+part 24/38 · 5.0 MB · 12.4 MB/s <span class="cursor"></span>
+          </div>
+        </div>
+        <div class="task">
+          <div class="task-head">
+            <span class="chip neutral">Range 下载</span>
+            <span class="task-name">logs/gateway/access-20261105.log ← prod-minio</span>
+            <span class="chip success">已完成 · 84 MB</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 详情面板 -->
+    <div class="detail" id="detail">
+      <div class="detail-head">
+        <span class="t mono">sssc-server-v2.4.1-linux-amd64.tar.gz</span>
+        <button class="icon-btn" onclick="closeDetail()"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+      </div>
+      <div class="detail-body">
+        <div class="section-t">元数据 (HeadObject)</div>
+        <div class="kv">
+          <span class="k">Key</span><span class="v">artifacts/releases/v2.4.1/sssc-server-v2.4.1-linux-amd64.tar.gz</span>
+          <span class="k">大小</span><span class="v">131.2 MB (137,530,880 bytes)</span>
+          <span class="k">ETag</span><span class="v">"c4ca4238a0b9238"</span>
+          <span class="k">存储类</span><span class="v">STANDARD</span>
+          <span class="k">VersionId</span><span class="v">3sL4kqtJlcpXroDTDmJ+.rHnDzX8.Khf</span>
+          <span class="k">LastModified</span><span class="v">2026-11-04T18:03:22Z</span>
+          <span class="k">Checksum</span><span class="v">CRC32C d1eN9g==</span>
+          <span class="k">服务端加密</span><span class="v">AES256 (SSE-S3)</span>
+        </div>
+        <div class="section-t">预签名链接</div>
+        <div class="presign-card">
+          <div class="row">
+            <select class="select" style="flex:1"><option>GET（下载）</option><option>PUT（上传）</option><option>HEAD</option></select>
+            <select class="select"><option>1 小时</option><option selected>24 小时</option><option>7 天（上限）</option></select>
+          </div>
+          <div class="url-box">https://s3.example.com:9000/artifacts/releases/v2.4.1/sssc-server-v2.4.1-linux-amd64.tar.gz?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Expires=86400&X-Amz-Signature=…</div>
+          <div class="row" style="margin-top:10px;margin-bottom:0">
+            <button class="btn btn-primary" style="flex:1" onclick="showToast()">复制链接</button>
+          </div>
+        </div>
+        <div class="section-t">标签</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:20px">
+          <span class="chip neutral">team:infra</span>
+          <span class="chip neutral">release:v2.4.1</span>
+          <button class="chip brand">+ 添加</button>
+        </div>
+        <div class="section-t">版本历史</div>
+        <div style="border:1px solid var(--ds-border-subtle);border-radius:var(--r-sm)">
+          <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--ds-border-subtle);font-size:12px">
+            <span class="chip brand">当前</span><span class="mono" style="color:var(--ds-fg-3)">3sL4kq…Khf · 131.2 MB</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;font-size:12px">
+            <span class="chip neutral">v1</span><span class="mono" style="color:var(--ds-fg-3)">pU3FZ2…aQb · 128.0 MB · 10-12</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 删除确认 -->
+    <div class="dialog-wrap" id="delDialog">
+      <div class="dialog">
+        <h3 class="danger">删除对象？</h3>
+        <p>此操作将在集群 <strong>prod-minio</strong> 的桶 <strong>artifacts</strong> 中删除 1 个对象：</p>
+        <p class="mono" style="font-size:12px">artifacts/releases/v2.4.1/sssc-server-v2.4.1-linux-amd64.tar.gz</p>
+        <p style="color:var(--ds-warning)">该桶已启用版本控制，删除将产生 Delete Marker（可恢复）。</p>
+        <input class="input confirm" placeholder="输入对象文件名以确认">
+        <div class="foot">
+          <button class="btn btn-secondary" onclick="closeDialog('delDialog')">取消</button>
+          <button class="btn btn-danger">删除</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- toast -->
+    <div class="toast" id="toast">
+      <div class="t">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--ds-danger)" stroke-width="1.5"><path d="M12 8v4m0 4h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
+        AccessDenied — Access Denied
+      </div>
+      <div class="m">ListObjectsV2 失败：签名 region 与 endpoint 不匹配。</div>
+      <div class="rid">RequestID: TX8F2E1D4C7…90AB · <button class="btn-ghost" style="font-size:11px;height:auto;padding:0" onclick="navigator.clipboard&&navigator.clipboard.writeText('TX8F2E1D4C7')"><u>复制</u></button></div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= ⌘K 命令面板 ================= -->
+<div class="overlay" id="cmdk" onclick="if(event.target===this)closeCmdk()">
+  <div class="cmdk">
+    <input id="cmdk-input" placeholder="输入命令、集群名、桶名或 s3:// 前缀…" oninput="renderCmdk()" onkeydown="if(event.key==='Escape')closeCmdk();if(event.key==='ArrowDown')cmdkMove(1);if(event.key==='ArrowUp')cmdkMove(-1);if(event.key==='Enter')cmdkExec()">
+    <div class="cmdk-list" id="cmdk-list"></div>
+  </div>
+</div>
+
+<script>
+const cmdkItems = [
+  {icon:'▣', cat:'集群', label:'切换到 dev-ceph', hint:'Ctrl+2', color:'var(--cluster-green)'},
+  {icon:'▣', cat:'集群', label:'切换到 aws-cn-beijing（需刷新 STS）', hint:'Ctrl+3', color:'var(--cluster-blue)'},
+  {icon:'⌂', cat:'跳转', label:'s3://prod-minio/artifacts/releases/v2.4.1/', hint:''},
+  {icon:'⌂', cat:'跳转', label:'s3://prod-minio/logs/gateway/', hint:''},
+  {icon:'↑', cat:'操作', label:'上传文件到当前前缀', hint:'U'},
+  {icon:'⛓', cat:'操作', label:'生成预签名链接…', hint:'P'},
+  {icon:'⇄', cat:'操作', label:'跨集群迁移对象…', hint:'M'},
+  {icon:'⚙', cat:'配置', label:'桶设置：生命周期规则', hint:''},
+  {icon:'⚙', cat:'配置', label:'桶设置：CORS', hint:''},
+  {icon:'⚙', cat:'配置', label:'桶设置：版本控制', hint:''},
+];
+let cmdkSel = 0;
+function renderCmdk(){
+  const q = document.getElementById('cmdk-input').value.trim();
+  const list = document.getElementById('cmdk-list');
+  const items = q ? cmdkItems.filter(i=>i.label.toLowerCase().includes(q.toLowerCase())||i.cat.includes(q)) : cmdkItems;
+  cmdkSel = 0;
+  list.innerHTML = items.map((i,idx)=>`
+    <div class="cmdk-item ${idx===0?'sel':''}" onclick="cmdkExec()" onmouseenter="cmdkSel=${idx};hlCmdk()">
+      <span style="color:${i.color||'var(--ds-fg-3)'};width:18px;text-align:center">${i.icon}</span>
+      <span>${i.label}</span>
+      <span class="cat">${i.cat}</span>
+      <span class="hint">${i.hint}</span>
+    </div>`).join('') || '<div style="padding:24px;text-align:center;color:var(--ds-placeholder);font-size:13px">无匹配结果</div>';
+}
+function hlCmdk(){
+  document.querySelectorAll('.cmdk-item').forEach((el,i)=>el.classList.toggle('sel',i===cmdkSel));
+}
+function cmdkMove(d){
+  const n = document.querySelectorAll('.cmdk-item').length;
+  cmdkSel = (cmdkSel+d+n)%n; hlCmdk();
+}
+function cmdkExec(){ closeCmdk(); showToast(); }
+function openCmdk(){ document.getElementById('cmdk').classList.add('show'); document.getElementById('cmdk-input').value=''; renderCmdk(); setTimeout(()=>document.getElementById('cmdk-input').focus(),50); }
+function closeCmdk(){ document.getElementById('cmdk').classList.remove('show'); }
+document.addEventListener('keydown',e=>{
+  if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'){e.preventDefault();openCmdk();}
+});
+
+const clusters = {
+  prod:{color:'var(--cluster-red)'}, dev:{color:'var(--cluster-green)'}, aws:{color:'var(--cluster-blue)'}
+};
+function switchCluster(el,key){
+  document.querySelectorAll('.cluster-item').forEach(c=>c.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById('accent').style.background = clusters[key].color;
+}
+function toggleSidebar(){ document.getElementById('sidebar').classList.toggle('collapsed'); }
+function toggleTransfer(){ document.getElementById('transfer').classList.toggle('open'); }
+function toggleTheme(){
+  document.documentElement.classList.toggle('dark');
+  const dark = document.documentElement.classList.contains('dark');
+  document.getElementById('theme-label').textContent = dark ? '浅色模式' : '深色模式';
+}
+function openDetail(e){ if(e.target.closest('button'))return; document.getElementById('detail').classList.add('open'); }
+function closeDetail(){ document.getElementById('detail').classList.remove('open'); }
+function openDeleteDialog(){ document.getElementById('delDialog').classList.add('show'); }
+function closeDialog(id){ document.getElementById(id).classList.remove('show'); }
+let toastTimer;
+function showToast(){
+  const t=document.getElementById('toast'); t.classList.add('show');
+  clearTimeout(toastTimer); toastTimer=setTimeout(()=>t.classList.remove('show'),3200);
+}
+</script>
+</body>
+</html>

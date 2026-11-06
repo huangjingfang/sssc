@@ -1,0 +1,81 @@
+/* ============================================================
+   SSSC Design Tokens — 基于 DeepSeek 官网实测 token（见 docs/03）
+   ============================================================ */
+:root {
+  /* 品牌 */
+  --ds-color-brand: #4D6BFE;
+  --ds-color-brand-deep: #3A65C2;
+  --ds-color-brand-medium: #4176E6;
+  --ds-brand-wash: rgba(65, 118, 230, 0.12);
+
+  /* 动作：主按钮近黑，非品牌蓝 */
+  --ds-btn-primary-bg: #1A1615;
+  --ds-btn-primary-fg: #ffffff;
+
+  /* 前景：黑 + 透明度分级 */
+  --ds-fg: #1E232C;
+  --ds-fg-2: rgba(30, 35, 44, 0.7);
+  --ds-fg-3: rgba(30, 35, 44, 0.55);
+  --ds-placeholder: #8691A1;
+  --ds-link: #234792;
+
+  /* 背景 */
+  --ds-bg-page: #F9F8F8;
+  --ds-bg-surface: #ffffff;
+  --ds-bg-hover: rgba(0, 0, 0, 0.04);
+
+  /* 边框四档 */
+  --ds-border-subtle: rgba(0, 0, 0, 0.06);
+  --ds-border-divider: rgba(0, 0, 0, 0.08);
+  --ds-border: rgba(0, 0, 0, 0.1);
+  --ds-border-strong: rgba(0, 0, 0, 0.2);
+  --ds-border-glass: rgba(9, 45, 78, 0.14);
+
+  /* 阴影（唯一 token） */
+  --ds-shadow-card: 0 0 1px #f1f5f9, 0 2px 4px rgba(0, 0, 0, 0.05),
+    0 12px 24px rgba(0, 0, 0, 0.06);
+
+  /* 语义色（低饱和适配） */
+  --ds-success: #2E7D5B;
+  --ds-success-wash: rgba(46, 125, 91, 0.1);
+  --ds-warning: #B4762A;
+  --ds-warning-wash: rgba(180, 118, 42, 0.1);
+  --ds-danger: #C2453D;
+  --ds-danger-wash: rgba(194, 69, 61, 0.1);
+
+  /* 多集群标识色 */
+  --cluster-red: #C2453D;
+  --cluster-green: #2E7D5B;
+  --cluster-blue: #4176E6;
+  --cluster-purple: #7A5AF8;
+  --cluster-amber: #B4762A;
+
+  --ds-font-sans: "DM Sans", system-ui, -apple-system, "PingFang SC",
+    "Microsoft YaHei", sans-serif;
+  --ds-font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Consolas, monospace;
+
+  --r-sm: 8px;
+  --r-input: 10px;
+  --r-panel: 16px;
+  --r-card: 24px;
+}
+
+html.dark {
+  --ds-fg: #ECEDEE;
+  --ds-fg-2: rgba(236, 237, 238, 0.7);
+  --ds-fg-3: rgba(236, 237, 238, 0.55);
+  --ds-placeholder: #6B7280;
+  --ds-link: #8FA6FF;
+  --ds-bg-page: #1F1F1F;
+  --ds-bg-surface: #292A2A;
+  --ds-bg-hover: rgba(255, 255, 255, 0.06);
+  --ds-border-subtle: rgba(255, 255, 255, 0.08);
+  --ds-border-divider: rgba(255, 255, 255, 0.12);
+  --ds-border: rgba(255, 255, 255, 0.16);
+  --ds-border-strong: rgba(255, 255, 255, 0.25);
+  --ds-color-brand: #6C86FF;
+  --ds-color-brand-medium: #8FA6FF;
+  --ds-brand-wash: rgba(108, 134, 255, 0.16);
+  --ds-btn-primary-bg: #ECEDEE;
+  --ds-btn-primary-fg: #1A1615;
+}

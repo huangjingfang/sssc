@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build outputs
+dist/
+src-tauri/target/
+src-tauri/.cargo-home/
+src-tauri/gen/
+tsconfig.tsbuildinfo
+
+# Rust
+**/*.rs.bk
+
+# Logs
+*.log
+pnpm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.idea/
+.vscode/
+*.swp
+
+# Local env
+.env
+.env.*
+!.env.example
