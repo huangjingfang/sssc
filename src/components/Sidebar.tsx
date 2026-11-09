@@ -1,6 +1,6 @@
 import type { KeyboardEvent } from "react";
 import type { ConnectionStatus, Profile } from "../types";
-import { IconMenu, IconMoon, IconSun, IconPlus, IconSearch, IconTrash, IconEdit, IconLogo } from "./icons";
+import { IconMenu, IconMoon, IconSun, IconPlus, IconSearch, IconTrash, IconEdit, IconLogo, IconLink, IconUnlink } from "./icons";
 
 const activateOnKey = (fn: () => void) => (e: KeyboardEvent) => {
   if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fn(); }
@@ -15,6 +15,10 @@ export default function Sidebar(props: {
   onSwitch: (id: string) => void;
   onEdit: (p: Profile) => void;
   onDelete: (p: Profile) => void;
+  /** 断开集群连接（本地状态，不影响远端） */
+  onDisconnect: (p: Profile) => void;
+  /** 重新连接集群（重新探活 ListBuckets） */
+  onReconnect: (p: Profile) => void;
   onAdd: () => void;
   onToggleCollapse: () => void;
   onToggleTheme: () => void;
@@ -39,7 +43,7 @@ export default function Sidebar(props: {
         )}
       </div>
       <button className="cmdk-trigger" onClick={props.onOpenCmdk}>
-        <IconSearch size={14} />
+        <IconSearch size={16} />
         <span className="trigger-text">搜索对象、切换集群…</span>
         <span className="kbd">⌘K</span>
       </button>
@@ -47,6 +51,7 @@ export default function Sidebar(props: {
         <div className="side-label">集群 · {profiles.length}</div>
         {profiles.map((p) => {
           const st = statuses[p.id];
+          const isDisconnected = !!st?.disconnected;
           return (
             <div
               key={p.id}
@@ -66,17 +71,31 @@ export default function Sidebar(props: {
                 <div className="cluster-name">
                   {p.name}
                   {!p.enabled && <span className="cluster-tag">禁用</span>}
+                  {isDisconnected && <span className="cluster-tag">已断开</span>}
                 </div>
                 <div className="cluster-meta">
-                  <span className={`dot ${st ? (st.ok ? "on" : "off") : "off"}`} />
-                  {st
-                    ? st.ok
-                      ? `已连接 · ${st.latencyMs ?? "—"}ms · ${st.bucketCount ?? "—"} 桶`
-                      : `${st.error?.code ?? "连接失败"}`
-                    : "未测试"
+                  <span className={`dot ${st ? (st.ok && !isDisconnected ? "on" : "off") : "off"}`} />
+                  {isDisconnected
+                    ? "已断开连接"
+                    : st
+                      ? st.ok
+                        ? `已连接 · ${st.latencyMs ?? "—"}ms · ${st.bucketCount ?? "—"} 桶`
+                        : `${st.error?.code ?? "连接失败"}`
+                      : "未测试"
                   }
                 </div>
               </div>
+              <button
+                className="icon-btn sm cluster-del"
+                title={isDisconnected ? "重新连接" : "断开连接"}
+                onClick={(ev) => {
+                  ev.stopPropagation();
+                  isDisconnected ? props.onReconnect(p) : props.onDisconnect(p);
+                }}
+                onKeyDown={(ev) => ev.stopPropagation()}
+              >
+                {isDisconnected ? <IconLink size={13} /> : <IconUnlink size={13} />}
+              </button>
               <button
                 className="icon-btn sm cluster-del"
                 title="编辑集群"

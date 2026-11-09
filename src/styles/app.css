@@ -22,8 +22,13 @@ svg { flex-shrink: 0; }
 .sidebar.collapsed .side-label, .sidebar.collapsed .cluster-body,
 .sidebar.collapsed .side-foot-text { display: none; }
 .sidebar.collapsed .cmdk-trigger {
-  width: calc(100% - 16px); justify-content: center; padding: 0;
+  /* 收起态与其他侧栏图标按钮统一：无边框、纯图标居中、与 foot-item 同高 */
+  width: calc(100% - 16px); margin: 4px 8px 12px; height: 34px;
+  justify-content: center; padding: 0;
+  border: none; background: transparent; color: var(--ds-fg-2);
+  border-radius: var(--r-sm);
 }
+.sidebar.collapsed .cmdk-trigger:hover { background: var(--ds-bg-hover); color: var(--ds-fg); border: none; }
 .sidebar.collapsed .cmdk-trigger .trigger-text,
 .sidebar.collapsed .cmdk-trigger .kbd { display: none; }
 .cluster-mini {

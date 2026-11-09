@@ -492,7 +492,7 @@ pub mod ops {
     }
 
     /// 分页列举前缀下全部 key（无 delimiter，含文件夹占位 marker 自身）。
-    async fn list_all_keys_under(client: &Client, bucket: &str, prefix: &str) -> Result<Vec<String>, S3Error> {
+    pub async fn list_all_keys_under(client: &Client, bucket: &str, prefix: &str) -> Result<Vec<String>, S3Error> {
         let mut token: Option<String> = None;
         let mut keys = Vec::new();
         loop {
@@ -585,12 +585,38 @@ pub mod ops {
     }
 
     /// 递归删除"文件夹"（前缀）下列出的全部对象（含文件夹占位对象 key 自身）。
+    /// SeaweedFS filer 存在真实目录元数据：纯"幽灵目录"（无任何对象）DeleteObjects
+    /// 删 0 个 key 等于没删，目录条目会保留。收尾统一"触碰 marker 再删除"
+    /// （PUT 前缀占位对象产生实体 → 再删，filer 即清空目录条目；对 AWS 等纯前缀
+    /// 语义的实现无副作用——创建后立刻删除）。
     pub async fn delete_folder(
         client: &Client,
         bucket: &str,
         prefix: &str,
     ) -> Result<DeleteFolderResult, S3Error> {
-        let r = delete_many(client, bucket, &[], &[prefix.to_string()], &|_, _| {}).await?;
+        let norm = if prefix.ends_with('/') { prefix.to_string() } else { format!("{prefix}/") };
+        let mut r = delete_many(client, bucket, &[], &[norm.clone()], &|_, _| {}).await?;
+        // 若仍有残留（删除后列表短暂不一致或怪癖重试中），再兜一轮
+        let remaining = list_all_keys_under(client, bucket, &norm).await.unwrap_or_default();
+        if !remaining.is_empty() {
+            let r2 = delete_many(client, bucket, &remaining, &[], &|_, _| {}).await?;
+            r.deleted_count += r2.deleted_count;
+            r.error_count += r2.error_count;
+            r.failures.extend(r2.failures);
+        }
+        // 触碰 marker 并删除：清除幽灵目录条目
+        let _ = client
+            .put_object()
+            .bucket(bucket)
+            .key(&norm)
+            .body(aws_sdk_s3::primitives::ByteStream::from_static(b""))
+            .send()
+            .await;
+        if let Err(e) = delete_object_resilient(client, bucket, &norm).await {
+            eprintln!("[delete_folder] 清除目录条目 {norm} 失败: {}", e.message);
+            r.error_count += 1;
+            r.failures.push(DeleteFailure { key: norm, code: e.code, message: e.message });
+        }
         Ok(DeleteFolderResult { deleted_count: r.deleted_count, error_count: r.error_count })
     }
 
@@ -785,6 +811,14 @@ pub mod ops {
         if err.message.trim().is_empty() {
             err.message = "（服务端未返回错误详情）".into();
         }
+        // 运行日志：便于从 dev 进程 stderr 定位偶发报错（含请求 id 与状态码）
+        eprintln!(
+            "[S3Err] code={} http={:?} rid={:?} msg={}",
+            err.code,
+            err.http_status,
+            err.request_id.as_deref().unwrap_or("-"),
+            err.message.chars().take(200).collect::<String>()
+        );
         err
     }
 }
@@ -827,12 +861,28 @@ fn write_private(path: &std::path::Path, content: &str) -> Result<(), S3Error> {
         }
         Ok(())
     };
-    write(&tmp)
-        .and_then(|()| fs::rename(&tmp, path))
-        .map_err(|e| {
-            let _ = fs::remove_file(&tmp);
-            S3Error::new("WriteConfig", format!("写入 {} 失败: {e}", path.display()))
-        })
+    let write_result = write(&tmp).and_then(|()| fs::rename(&tmp, path));
+    match write_result {
+        Ok(()) => Ok(()),
+        Err(rename_err) => {
+            // 兜底：rename 被拒（macOS App Management TCC 对带 com.apple.provenance 属性的
+            // 旧文件做 rename 替换会返回 EPERM，尤其 dev 每次重编译签名不同）→
+            // 原地截断写入（保 inode 与权限位），并保留 .tmp 内容供人工排查
+            let fallback = write(path);
+            match fallback {
+                Ok(()) => {
+                    let _ = fs::remove_file(&tmp);
+                    Ok(())
+                }
+                Err(e2) => {
+                    Err(S3Error::new(
+                        "WriteConfig",
+                        format!("写入 {} 失败: rename: {rename_err}; 原地写入: {e2}", path.display()),
+                    ))
+                }
+            }
+        }
+    }
 }
 
 #[cfg(unix)]

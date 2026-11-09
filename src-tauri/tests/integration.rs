@@ -445,3 +445,98 @@ async fn tc14_delete_folder_recursive() {
     let _ = std::fs::remove_file(&fresh);
     println!("[TC14] PASSED");
 }
+
+/// TC15：快速切换桶/前缀的列表风暴（复现 UI 切桶高概率报错）。
+#[tokio::test]
+async fn tc15_list_switch_storm() {
+    let Some(p) = target() else { return; };
+    let secret = p.secret_key.clone().unwrap();
+    let client = ops::build_client(&p, &secret).await;
+    let work = std::env::var("SSSC_IT_WORK_BUCKET").unwrap_or_else(|_| "hdd-demo".into());
+
+    let mut errs = 0;
+    for i in 0..20 {
+        // 模拟 UI 切桶：桶列表与对象列表交替、无间隔连发
+        let r = if i % 2 == 0 {
+            ops::list_buckets(&client).await.map(|_| ()).map(|()| ())
+        } else {
+            ops::list_objects(&client, &work, "", None).await.map(|_| ())
+        };
+        if let Err(e) = &r {
+            errs += 1;
+            println!("[TC15] 第 {i} 次失败: code={} http={:?} msg={}", e.code, e.http_status, &e.message[..e.message.len().min(120)]);
+        }
+    }
+    println!("[TC15] 完成：20 次连续列表，失败 {errs} 次");
+    assert!(errs == 0, "列表风暴失败 {errs}/20 次");
+}
+
+/// TC16：并发列表风暴（模拟 UI 快速切桶时多个 list 在途）。
+#[tokio::test]
+async fn tc16_list_concurrent() {
+    let Some(p) = target() else { return; };
+    let secret = p.secret_key.clone().unwrap();
+    let client = ops::build_client(&p, &secret).await;
+    let work = std::env::var("SSSC_IT_WORK_BUCKET").unwrap_or_else(|_| "hdd-demo".into());
+
+    let mut errs = 0;
+    for round in 0..5 {
+        // 同一 client 上 5 个并发 list（模拟快速切桶时旧请求未返回新请求已发出）
+        let mut futs = Vec::new();
+        for j in 0..5u32 {
+            let prefixes = ["", "diag-a/", "diag-dir/", "s3browser/", "nonexist-xyz/"];
+            let f = ops::list_objects(&client, &work, prefixes[j as usize % prefixes.len()], None);
+            futs.push(f);
+        }
+        let results = futures_util::future::join_all(futs).await;
+        for (j, r) in results.into_iter().enumerate() {
+            if let Err(e) = r {
+                errs += 1;
+                println!("[TC16] 轮 {round} 并发#{j} 失败: code={} http={:?} msg={}", e.code, e.http_status, &e.message[..e.message.len().min(120)]);
+            }
+        }
+    }
+    println!("[TC16] 完成：5 轮 × 5 并发列表，失败 {errs} 次");
+    assert!(errs == 0, "并发列表失败 {errs}/25 次");
+}
+
+/// TC17：打印集群所有桶（用于定位切桶报错测试目标）。
+#[tokio::test]
+async fn tc17_list_all_buckets_print() {
+    let Some(p) = target() else { return; };
+    let secret = p.secret_key.clone().unwrap();
+    let client = ops::build_client(&p, &secret).await;
+    let bs = ops::list_buckets(&client).await.unwrap();
+    for b in &bs { println!("[TC17] bucket: {}", b.name); }
+}
+
+/// TC18：打印 hdd-demo 根目录的 prefixes 与对象（排查文件夹删除后残留）。
+#[tokio::test]
+async fn tc18_dump_root_prefixes() {
+    let Some(p) = target() else { return; };
+    let secret = p.secret_key.clone().unwrap();
+    let client = ops::build_client(&p, &secret).await;
+    let work = std::env::var("SSSC_IT_WORK_BUCKET").unwrap_or_else(|_| "hdd-demo".into());
+    let l = ops::list_objects(&client, &work, "", None).await.unwrap();
+    println!("[TC18] prefixes: {:?}", l.prefixes);
+    println!("[TC18] objects: {}", l.objects.len());
+    for o in &l.objects { println!("[TC18]   obj: {} ({:?}B)", o.key, o.size); }
+}
+
+/// TC19：对 SSSC_IT_TARGET_PREFIX 执行 delete_folder 并回读验证（诊断残留）。
+#[tokio::test]
+async fn tc19_delete_folder_diag() {
+    let Some(p) = target() else { return; };
+    let secret = p.secret_key.clone().unwrap();
+    let client = ops::build_client(&p, &secret).await;
+    let work = std::env::var("SSSC_IT_WORK_BUCKET").unwrap_or_else(|_| "hdd-demo".into());
+    let prefix = std::env::var("SSSC_IT_TARGET_PREFIX").unwrap();
+    let before = ops::list_all_keys_under(&client, &work, &prefix).await.unwrap_or_else(|e| { println!("[TC19] 列举失败 {e:?}"); vec![] });
+    println!("[TC19] 前缀 {prefix} 下 key 数: {}", before.len());
+    for k in &before { println!("[TC19]   {k}"); }
+    let r = ops::delete_folder(&client, &work, &prefix).await.unwrap();
+    println!("[TC19] delete_folder: deleted={} errors={}", r.deleted_count, r.error_count);
+    let after = ops::list_all_keys_under(&client, &work, &prefix).await.unwrap_or_default();
+    println!("[TC19] 删除后残留 key 数: {}", after.len());
+    for k in &after { println!("[TC19]   残留: {k}"); }
+}

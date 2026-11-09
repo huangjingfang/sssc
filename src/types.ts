@@ -27,6 +27,8 @@ export interface ConnectionStatus {
   latencyMs: number | null;
   bucketCount: number | null;
   error: S3Error | null;
+  /** 前端本地状态：用户主动断开连接（true 时忽略 ok/error） */
+  disconnected?: boolean;
 }
 
 export interface Bucket {

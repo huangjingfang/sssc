@@ -47,7 +47,7 @@ cd src-tauri && cargo test --test integration -- --nocapture --test-threads=1
 
 ## 已实现（v0.1）
 
-- 多集群 Profile：增删、连接测试（ListBuckets 探活 + 延迟）、标识色、endpoint/region/path-style/**自签开关（insecure_tls：rustls 跳过证书校验）**；**密钥持久化（secrets.json 0600 原子写入），重启不丢**
+- 多集群 Profile：增删、连接测试（ListBuckets 探活 + 延迟）、**断开连接 / 重新连接**（本地状态，重连重新探活）、标识色、endpoint/region/path-style/**自签开关（insecure_tls：rustls 跳过证书校验）**；**密钥持久化（secrets.json 0600 原子写入），重启不丢**
 - 桶：列表/创建/删除（空桶校验 + 二次确认）
 - 对象浏览（ListObjectsV2 + delimiter 目录树 + encoding-type=url + **continuation token 分页"加载更多"**）、删除、SigV4 预签名（1h/24h/7d，V4/V2 兼容）
 - **对象多选**：复选框批量选择（含文件夹），批量删除；**文件夹递归删除**（ListObjectsV2 列举 + DeleteObjects 批量，每批 1000 个）

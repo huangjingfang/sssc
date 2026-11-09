@@ -21,6 +21,7 @@ export const IconCheck = (p: P) => S(<><path d="M20 6 9 17l-5-5" /></>, p);
 export const IconPlus = (p: P) => S(<><path d="M12 5v14M5 12h14" /></>, p);
 export const IconEdit = (p: P) => S(<><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" /></>, p);
 export const IconSpinner = (p: P) => S(<><path d="M21 12a9 9 0 1 1-6.2-8.6" /></>, p);
+export const IconUnlink = (p: P) => S(<><path d="M17 7 8.5 15.5a3.5 3.5 0 0 0 5 5l3-3a3.5 3.5 0 0 0 0-5M8.5 15.5 7 17l-2 2m7.5-16.5 2-2a3.5 3.5 0 0 1 5 5l-2 2M3 8l2-2m11 13 2 2" /></>, p);
 
 /** 品牌 Logo：明亮渐变（天蓝→阳光橙）圆角方块 + 白色云朵上传，简洁现代 */
 export const IconLogo = ({ size = 28, className }: P) => (

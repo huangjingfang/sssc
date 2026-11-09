@@ -7,7 +7,7 @@ import ObjectTable from "./components/ObjectTable";
 import DetailPanel from "./components/DetailPanel";
 import TransferBar from "./components/TransferBar";
 import { Cmdk, Toasts, useToast, CmdkAction, buildClusterActions, Dialog } from "./components/overlays";
-import { IconPlus, IconRefresh, IconUpload, IconFolder, IconSpinner } from "./components/icons";
+import { IconPlus, IconRefresh, IconUpload, IconFolder, IconSpinner, IconLink } from "./components/icons";
 import ErrorBoundary from "./components/ErrorBoundary";
 
 const EMPTY_LIST: ListResult = { objects: [], prefixes: [], nextToken: null, keyCount: 0 };
@@ -39,6 +39,10 @@ export default function App() {
   const [dark, setDark] = useState(initialDark);
   const [deleteTarget, setDeleteTarget] = useState<Profile | null>(null);
   const [deleteObjTarget, setDeleteObjTarget] = useState<S3Object | null>(null);
+  /** 单项删除 loading（对象/集群/桶各自的确认对话框按钮态） */
+  const [deletingObj, setDeletingObj] = useState(false);
+  const [deletingCluster, setDeletingCluster] = useState(false);
+  const [deletingBucket, setDeletingBucket] = useState(false);
   /** 多选删除：待确认删除的 key 列表（对话框确认前） */
   const [deleteManyTarget, setDeleteManyTarget] = useState<string[] | null>(null);
   const [deletingMany, setDeletingMany] = useState(false);
@@ -55,6 +59,9 @@ export default function App() {
   /* 请求序号：过期响应（竞态）丢弃 */
   const reqSeq = useRef(0);
   const active = profiles.find((p) => p.id === activeId) ?? null;
+  /** 用户主动断开连接的集群（本地状态；ref 供 effect 无依赖读取） */
+  const disconnectedRef = useRef<Set<string>>(new Set());
+  const activeDisconnected = !!statuses[activeId ?? ""]?.disconnected;
 
   /* 深浅色主题持久化 */
   useEffect(() => {
@@ -108,6 +115,7 @@ export default function App() {
   }, [activeId, bucket, prefix, list, loading, loadingMore, pushS3Error]);
 
   const loadBuckets = useCallback(async (pid: string) => {
+    disconnectedRef.current.delete(pid); // 主动刷新/重连视为恢复连接
     const seq = ++reqSeq.current;
     setLoading(true);
     setBucket(null);
@@ -144,7 +152,13 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (activeId) loadBuckets(activeId);
+    if (!activeId) return;
+    if (disconnectedRef.current.has(activeId)) {
+      // 已断开的集群：切换/重挂载时不自动重连，仅清空旧数据
+      setBuckets(null); setBucket(null); setPrefix(""); setList(null);
+      return;
+    }
+    loadBuckets(activeId);
   }, [activeId, loadBuckets]);
 
   useEffect(() => {
@@ -195,16 +209,58 @@ export default function App() {
   }, []);
 
   /* ---------- 交互 ---------- */
-  const switchCluster = (id: string) => { setActiveId(id); };
+  const switchCluster = (id: string) => {
+    // 同一批次内清空桶/前缀/列表：否则 loadObjects effect 会在本次提交里带着
+    // 旧集群的 bucket + 新集群的 activeId 发请求（跨集群错配 → NoSuchBucket）
+    if (id === activeId) return;
+    setActiveId(id);
+    setBucket(null);
+    setPrefix("");
+    setList(null);
+    setBuckets(null);
+    setSelected(null);
+    setCheckedKeys([]);
+  };
+
+  /** 断开集群连接：仅本地状态，不产生任何远端请求；清空已加载数据 */
+  const disconnectCluster = (p: Profile) => {
+    disconnectedRef.current.add(p.id);
+    setStatuses((s) => ({
+      ...s,
+      [p.id]: { ok: false, latencyMs: null, bucketCount: null, error: null, disconnected: true },
+    }));
+    if (p.id === activeId) {
+      setBuckets(null); setBucket(null); setPrefix(""); setList(null);
+      setSelected(null); setCheckedKeys([]);
+    }
+    push({ kind: "info", title: "已断开连接", message: `${p.name} 已断开（仅本地状态，不影响远端）` });
+  };
+
+  /** 重新连接：重新探活（ListBuckets）并恢复桶列表 */
+  const reconnectCluster = async (p: Profile) => {
+    if (p.id === activeId) {
+      await loadBuckets(p.id);
+    } else {
+      // 非当前集群：只复位状态为“未测试”，切换过去时 effect 会自动探活
+      disconnectedRef.current.delete(p.id);
+      setStatuses((s) => {
+        const { [p.id]: _removed, ...rest } = s;
+        return rest as typeof s;
+      });
+    }
+  };
 
   const confirmDelete = async () => {
     const target = deleteTarget;
     if (!target) return;
+    setDeletingCluster(true);
     try {
       await api.deleteProfile(target.id);
     } catch (e) {
       pushS3Error("删除集群失败", e);
       return;
+    } finally {
+      setDeletingCluster(false);
     }
     // 删除成功后再更新本地状态（副作用不放 setState updater 内）
     setDeleteTarget(null);
@@ -235,6 +291,12 @@ export default function App() {
       icon: "⌂", cat: "桶", label: `s3://${active?.name ?? ""}/${safeDecode(b.name)}/`, run: () => selectBucket(b.name),
     })) ?? [],
     { icon: "＋", cat: "集群", label: "添加集群…", color: "var(--ds-color-brand-medium)", run: () => setAddOpen(true) },
+    ...(active ? [{
+      icon: activeDisconnected ? "⇄" : "⤫",
+      cat: "集群",
+      label: activeDisconnected ? `重新连接 ${active.name}` : `断开连接 ${active.name}`,
+      run: () => { activeDisconnected ? void reconnectCluster(active) : disconnectCluster(active); },
+    }] : []),
     ...(activeId && bucket ? [{
       icon: "↑", cat: "操作", label: `上传文件到 ${safeDecode(prefix) || "根目录"}`, run: () => { void doUpload(); },
     }] : []),
@@ -281,6 +343,7 @@ export default function App() {
   const confirmDeleteObject = async () => {
     const target = deleteObjTarget;
     if (!target || !activeId || !bucket) return;
+    setDeletingObj(true);
     try {
       await api.deleteObject(activeId, bucket, target.key);
       setDeleteObjTarget(null);
@@ -289,6 +352,8 @@ export default function App() {
       push({ kind: "info", title: "对象已删除", message: `${bucket}/${target.key}` });
     } catch (e) {
       pushS3Error("删除对象失败", e);
+    } finally {
+      setDeletingObj(false);
     }
   };
 
@@ -342,6 +407,13 @@ export default function App() {
       setBatchProg(null);
       setDeleteManyTarget(null);
       if (activeId && bucket) await loadObjects(activeId, bucket, prefix);
+      if (folders.length > 0) {
+        // SeaweedFS 删除后列表有短暂不一致：延时补刷一次
+        window.setTimeout(() => {
+          const { activeId: pid, bucket: b, prefix: pp } = listCtx.current;
+          if (pid && b) reloadRef.current(pid, b, pp);
+        }, 1200);
+      }
     }
   };
 
@@ -377,13 +449,18 @@ export default function App() {
   const doDeleteBucket = async () => {
     if (!activeId || !bucketDeleteTarget) return;
     const name = bucketDeleteTarget;
-    setBucketDeleteTarget(null);
+    setDeletingBucket(true);
     try {
       await api.deleteBucket(activeId, name);
+      setBucketDeleteTarget(null);
       if (bucket === name) { setBucket(null); setPrefix(""); }
       await loadBuckets(activeId);
       push({ kind: "info", title: "删桶成功", message: `${name} 已删除` });
-    } catch (e) { pushS3Error("删桶失败", e); }
+    } catch (e) {
+      pushS3Error("删桶失败", e);
+    } finally {
+      setDeletingBucket(false);
+    }
   };
 
   /* ---------- 空状态 ---------- */
@@ -420,6 +497,8 @@ export default function App() {
         onSwitch={switchCluster}
         onEdit={(p) => setEditTarget(p)}
         onDelete={(p) => setDeleteTarget(p)}
+        onDisconnect={disconnectCluster}
+        onReconnect={(p) => void reconnectCluster(p)}
         onAdd={() => setAddOpen(true)}
         onToggleCollapse={() => setCollapsed(!collapsed)}
         onToggleTheme={() => setDark(!dark)}
@@ -443,7 +522,11 @@ export default function App() {
             ))}
           </div>
           <div className="spacer" />
-          {!bucket ? (
+          {activeDisconnected ? (
+            <button className="btn btn-primary" onClick={() => active && reconnectCluster(active)}>
+              <IconLink size={14} /> 重新连接
+            </button>
+          ) : !bucket ? (
             <button className="btn btn-primary" onClick={() => setNewBucketOpen(true)}>
               <IconPlus size={14} /> 新建桶
             </button>
@@ -517,24 +600,30 @@ export default function App() {
         </ErrorBoundary>
         {cmdkOpen && <Cmdk actions={cmdkActions} onClose={() => setCmdkOpen(false)} />}
         {deleteTarget && (
-          <Dialog onClose={() => setDeleteTarget(null)}>
+          <Dialog onClose={() => (deletingCluster ? null : setDeleteTarget(null))}>
             <h3 className="danger">删除集群？</h3>
             <p>将从本机移除集群 <strong>{deleteTarget.name}</strong>（endpoint <strong>{deleteTarget.endpoint}</strong>）。</p>
             <p>仅删除本地连接配置与本机保存的密钥，不会影响远端集群的任何数据。</p>
             <div className="foot">
-              <button className="btn btn-secondary" onClick={() => setDeleteTarget(null)}>取消</button>
-              <button className="btn btn-danger" onClick={confirmDelete}>删除</button>
+              <button className="btn btn-secondary" onClick={() => setDeleteTarget(null)} disabled={deletingCluster}>取消</button>
+              <button className="btn btn-danger" onClick={confirmDelete} disabled={deletingCluster}>
+                {deletingCluster && <IconSpinner size={13} className="spin" />}
+                {deletingCluster ? "删除中…" : "删除"}
+              </button>
             </div>
           </Dialog>
         )}
         {deleteObjTarget && (
-          <Dialog onClose={() => setDeleteObjTarget(null)}>
+          <Dialog onClose={() => (deletingObj ? null : setDeleteObjTarget(null))}>
             <h3 className="danger">删除对象？</h3>
             <p>将从 <strong>{bucket}</strong> 永久删除对象 <strong>{deleteObjTarget.key}</strong>。</p>
             <p>此操作不可恢复；同名对象再次上传前将一直 404。</p>
             <div className="foot">
-              <button className="btn btn-secondary" onClick={() => setDeleteObjTarget(null)}>取消</button>
-              <button className="btn btn-danger" onClick={confirmDeleteObject}>删除</button>
+              <button className="btn btn-secondary" onClick={() => setDeleteObjTarget(null)} disabled={deletingObj}>取消</button>
+              <button className="btn btn-danger" onClick={confirmDeleteObject} disabled={deletingObj}>
+                {deletingObj && <IconSpinner size={13} className="spin" />}
+                {deletingObj ? "删除中…" : "删除"}
+              </button>
             </div>
           </Dialog>
         )}
@@ -610,13 +699,16 @@ export default function App() {
           </Dialog>
         )}
         {bucketDeleteTarget && (
-          <Dialog onClose={() => setBucketDeleteTarget(null)}>
+          <Dialog onClose={() => (deletingBucket ? null : setBucketDeleteTarget(null))}>
             <h3 className="danger">删除桶？</h3>
             <p>将删除集群 <strong>{active?.name}</strong> 上的桶 <strong>{bucketDeleteTarget}</strong>。</p>
             <p>仅空桶可删除；桶内任何对象都会导致 <span className="mono">BucketNotEmpty</span> 失败。</p>
             <div className="foot">
-              <button className="btn btn-secondary" onClick={() => setBucketDeleteTarget(null)}>取消</button>
-              <button className="btn btn-danger" onClick={doDeleteBucket}>删除</button>
+              <button className="btn btn-secondary" onClick={() => setBucketDeleteTarget(null)} disabled={deletingBucket}>取消</button>
+              <button className="btn btn-danger" onClick={doDeleteBucket} disabled={deletingBucket}>
+                {deletingBucket && <IconSpinner size={13} className="spin" />}
+                {deletingBucket ? "删除中…" : "删除"}
+              </button>
             </div>
           </Dialog>
         )}
