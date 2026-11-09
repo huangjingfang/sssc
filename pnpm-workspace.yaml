@@ -1,2 +1,7 @@
+# 单包项目：声明根目录为唯一 workspace 成员。
+# 保留此文件是因为 pnpm ≥10 的构建脚本白名单（allowBuilds）必须写在这里；
+# packages 字段缺失会导致旧版 pnpm 报 "packages field missing or empty"。
+packages:
+  - '.'
 allowBuilds:
   esbuild: true
