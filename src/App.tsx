@@ -323,7 +323,8 @@ export default function App() {
     const files = await pickFiles();
     if (!files?.length) return;
     for (const f of files) {
-      const base = f.split("/").pop() ?? f;
+      // Windows 本地路径分隔符是 \（如 C:\folder1\a.txt），需同时按 /\ 切分取文件名
+      const base = f.split(/[\\/]/).pop() ?? f;
       const key = prefix + base;
       api.uploadFile(activeId, bucket, key, f).catch((e) => pushS3Error("上传失败", e));
     }
