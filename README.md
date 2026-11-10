@@ -1,5 +1,7 @@
 # SSSC · S3 多集群桌面客户端
 
+[English](README.en.md) | 简体中文
+
 面向研发人员的跨平台（Windows / macOS / Linux）S3 对象存储客户端，支持多集群（Profile）管理与切换，兼容 AWS S3 及 MinIO / Ceph RGW / SeaweedFS / 各云厂商 S3 兼容端点。
 
 ## 技术栈
