@@ -10,18 +10,7 @@ on:
 
 jobs:
   build-macos:
-    strategy:
-      fail-fast: false
-      matrix:
-        settings:
-          # macos-14+ runner 为 Apple Silicon (arm64)，macos-13 为 Intel (x86_64)
-          - platform: macos-latest
-            target: aarch64-apple-darwin
-            label: apple-silicon
-          - platform: macos-13
-            target: x86_64-apple-darwin
-            label: intel
-    runs-on: ${{ matrix.settings.platform }}
+    runs-on: macos-latest # Apple Silicon (arm64)
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -39,7 +28,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.settings.target }}
+          targets: aarch64-apple-darwin
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -54,21 +43,21 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          # 分别打包 Apple Silicon / Intel 目标（.app + .dmg）
-          args: '--target ${{ matrix.settings.target }}'
+          # Apple Silicon 目标（.app + .dmg）
+          args: '--target aarch64-apple-darwin'
           # 打 tag(v*) 时自动创建 Release 并上传安装包
           tagName: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
           releaseName: 'SSSC ${{ github.ref_name }}'
-          releaseBody: 'macOS 安装包:.dmg（Apple Silicon 与 Intel 两个架构）'
+          releaseBody: 'macOS 安装包:.dmg（Apple Silicon）'
           releaseDraft: false
           prerelease: false
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: sssc-macos-${{ matrix.settings.label }}
+          name: sssc-macos-apple-silicon
           path: |
-            src-tauri/target/${{ matrix.settings.target }}/release/bundle/dmg/*.dmg
-            src-tauri/target/${{ matrix.settings.target }}/release/bundle/macos/*.app
+            src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+            src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app
           if-no-files-found: error
           retention-days: 30
