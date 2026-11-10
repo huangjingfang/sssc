@@ -584,11 +584,62 @@ pub mod ops {
         Ok(DeleteBatchResult { deleted_count: deleted, error_count, failures })
     }
 
+    /// 清除 SeaweedFS filer 等实现的"幽灵目录"条目：
+    /// PUT 前缀占位对象产生实体（触碰 marker）→ 再删除，filer 即清空目录条目。
+    /// 对 AWS 等纯前缀语义的实现无副作用——创建后立刻删除。
+    pub async fn touch_and_delete_marker(client: &Client, bucket: &str, prefix: &str) -> Result<(), S3Error> {
+        let norm = if prefix.ends_with('/') { prefix.to_string() } else { format!("{prefix}/") };
+        let _ = client
+            .put_object()
+            .bucket(bucket)
+            .key(&norm)
+            .body(aws_sdk_s3::primitives::ByteStream::from_static(b""))
+            .send()
+            .await;
+        delete_object_resilient(client, bucket, &norm).await
+    }
+
+    /// 递归收集 prefix 下的全部子目录 CommonPrefix（含任意深度，不含 prefix 自身）。
+    async fn list_dir_tree(client: &Client, bucket: &str, prefix: &str, out: &mut Vec<String>) -> Result<(), S3Error> {
+        let mut token: Option<String> = None;
+        loop {
+            let mut req = client.list_objects_v2().bucket(bucket).prefix(prefix).delimiter("/");
+            if let Some(t) = &token {
+                req = req.continuation_token(t);
+            }
+            let page = req.send().await.map_err(map_s3_err)?;
+            for p in page.common_prefixes() {
+                let pfx = p.prefix().unwrap_or_default().to_string();
+                if pfx.is_empty() { continue; }
+                Box::pin(list_dir_tree(client, bucket, &pfx, out)).await?;
+                out.push(pfx);
+            }
+            token = page.next_continuation_token().map(|s| s.to_string());
+            if token.is_none() {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    /// 清除目录条目及其全部嵌套子目录条目（针对 SeaweedFS filer 的真实目录元数据）。
+    /// 多级目录（如 a/b/c/）仅清顶层不够：子目录条目残留会让父级仍显示为目录。
+    /// 做法：深度倒序逐级 touch marker 再删除，最后清 prefix 自身。
+    pub async fn purge_dir_tree(client: &Client, bucket: &str, prefix: &str) -> Result<(), S3Error> {
+        let norm = if prefix.ends_with('/') { prefix.to_string() } else { format!("{prefix}/") };
+        let mut dirs = Vec::new();
+        list_dir_tree(client, bucket, &norm, &mut dirs).await?;
+        // 深度倒序（先删最深层），父级目录在子级清空后才能被清除
+        dirs.sort_by_key(|d| std::cmp::Reverse(d.matches('/').count()));
+        for d in &dirs {
+            let _ = touch_and_delete_marker(client, bucket, d).await;
+        }
+        touch_and_delete_marker(client, bucket, &norm).await
+    }
+
     /// 递归删除"文件夹"（前缀）下列出的全部对象（含文件夹占位对象 key 自身）。
     /// SeaweedFS filer 存在真实目录元数据：纯"幽灵目录"（无任何对象）DeleteObjects
-    /// 删 0 个 key 等于没删，目录条目会保留。收尾统一"触碰 marker 再删除"
-    /// （PUT 前缀占位对象产生实体 → 再删，filer 即清空目录条目；对 AWS 等纯前缀
-    /// 语义的实现无副作用——创建后立刻删除）。
+    /// 删 0 个 key 等于没删，目录条目会保留。收尾统一"触碰 marker 再删除"。
     pub async fn delete_folder(
         client: &Client,
         bucket: &str,
@@ -604,15 +655,8 @@ pub mod ops {
             r.error_count += r2.error_count;
             r.failures.extend(r2.failures);
         }
-        // 触碰 marker 并删除：清除幽灵目录条目
-        let _ = client
-            .put_object()
-            .bucket(bucket)
-            .key(&norm)
-            .body(aws_sdk_s3::primitives::ByteStream::from_static(b""))
-            .send()
-            .await;
-        if let Err(e) = delete_object_resilient(client, bucket, &norm).await {
+        // 清除目录条目（含全部嵌套子目录）：SeaweedFS filer 真实目录元数据
+        if let Err(e) = purge_dir_tree(client, bucket, &norm).await {
             eprintln!("[delete_folder] 清除目录条目 {norm} 失败: {}", e.message);
             r.error_count += 1;
             r.failures.push(DeleteFailure { key: norm, code: e.code, message: e.message });
@@ -1170,15 +1214,24 @@ async fn delete_batch(
     emit_progress(0, 0, "listing");
     let keys_ref = &keys;
     let prefixes_ref = &prefixes;
-    let r = ops::delete_many(&client, &bucket, keys_ref, prefixes_ref, &|done, total| {
+    let mut r = ops::delete_many(&client, &bucket, keys_ref, prefixes_ref, &|done, total| {
         emit_progress(done, total, "deleting");
     })
-    .await;
-    // 最终进度事件（100%）
-    if let Ok(res) = &r {
-        emit_progress(res.deleted_count + res.error_count, res.deleted_count + res.error_count, "done");
+    .await?;
+    // 与 delete_folder 一致的收尾：SeaweedFS filer 等实现存在真实目录元数据，
+    // 仅删除文件 key 后目录条目会残留（幽灵目录）→ 自底向上清除整棵目录树。
+    // 对 AWS 等纯前缀语义的实现无副作用（创建后立刻删除）。
+    for p in prefixes {
+        let norm = if p.ends_with('/') { p.clone() } else { format!("{p}/") };
+        if let Err(e) = ops::purge_dir_tree(&client, &bucket, &norm).await {
+            eprintln!("[delete_batch] 清除目录条目 {norm} 失败: {}", e.message);
+            r.error_count += 1;
+            r.failures.push(DeleteFailure { key: norm, code: e.code, message: e.message });
+        }
     }
-    r
+    // 最终进度事件（100%）
+    emit_progress(r.deleted_count + r.error_count, r.deleted_count + r.error_count, "done");
+    Ok(r)
 }
 
 #[tauri::command]
