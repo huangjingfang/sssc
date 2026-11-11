@@ -38,26 +38,39 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
+      # 显式 build（而非 tauri-action）：bundler 在指定 --target 时会跳过
+      # .app bundle 签名，产物被 Gatekeeper 判定"已损坏"，需要自行深度签名
       - name: Build Tauri app
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          # Apple Silicon 目标（.app + .dmg）
-          args: '--target aarch64-apple-darwin'
-          # 打 tag(v*) 时自动创建 Release 并上传安装包
-          tagName: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
-          releaseName: 'SSSC ${{ github.ref_name }}'
-          releaseBody: 'macOS 安装包:.dmg（Apple Silicon）'
-          releaseDraft: false
-          prerelease: false
+        run: pnpm tauri build --target aarch64-apple-darwin
+
+      - name: Ad-hoc codesign app bundle
+        run: |
+          APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/SSSC.app"
+          codesign --force --deep --sign - "$APP"
+          codesign --verify --deep --strict "$APP"
+          echo "✅ 签名校验通过"
+
+      - name: Repack DMG
+        run: |
+          APP_DIR="src-tauri/target/aarch64-apple-darwin/release/bundle/macos"
+          VERSION=$(python3 -c "import json;print(json.load(open('src-tauri/tauri.conf.json'))['version'])")
+          STAGING=$(mktemp -d)
+          cp -R "$APP_DIR/SSSC.app" "$STAGING/"
+          ln -s /Applications "$STAGING/Applications"
+          hdiutil create -volname "SSSC" -srcfolder "$STAGING" -ov -format UDZO \
+            "SSSC_${VERSION}_aarch64.dmg"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: sssc-macos-apple-silicon
-          path: |
-            src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
-            src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app
+          path: SSSC_*_aarch64.dmg
           if-no-files-found: error
           retention-days: 30
+
+      # 打 tag(v*) 时上传安装包到 Release
+      - name: Upload to Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: SSSC_*_aarch64.dmg
